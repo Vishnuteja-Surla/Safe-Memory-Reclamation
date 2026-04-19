@@ -1,0 +1,2 @@
+; Ignore the course materials submodule — it has its own dune-project
+(dirs :standard \ cs6868_s26)

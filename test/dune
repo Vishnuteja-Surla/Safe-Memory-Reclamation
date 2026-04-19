@@ -1,0 +1,4 @@
+(executable
+ (name test_lockfree_pool)
+ (modules test_lockfree_pool)
+ (libraries lockfree_pool unix))
