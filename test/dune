@@ -2,3 +2,18 @@
  (name test_lockfree_pool)
  (modules test_lockfree_pool)
  (libraries lockfree_pool unix))
+
+(executable
+ (name test_aba_demo)
+ (modules test_aba_demo)
+ (libraries unix))
+
+(executable
+ (name test_hazard_pointer)
+ (modules test_hazard_pointer)
+ (libraries hazard_pointer unix))
+
+(executable
+ (name test_hp_pool)
+ (modules test_hp_pool)
+ (libraries hp_pool unix))

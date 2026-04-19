@@ -1,3 +1,12 @@
 (library
  (name lockfree_pool)
  (modules lockfree_pool))
+
+(library
+ (name hazard_pointer)
+ (modules hazard_pointer))
+
+(library
+ (name hp_pool)
+ (modules hp_pool)
+ (libraries lockfree_pool hazard_pointer))

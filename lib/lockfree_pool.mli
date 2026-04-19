@@ -10,11 +10,18 @@
     {!Hp_pool} or {!Ebr_pool} for safe concurrent usage. *)
 
 (** A node in the pool. Nodes are pre-allocated and recycled.
-    Identified by physical equality ([==]). *)
-type 'a node
+    Identified by physical equality ([==]).
+    The [next] field is atomic for lock-free stack operations. *)
+type 'a node = {
+  mutable value : 'a;
+  mutable next : 'a node option; [@atomic]
+}
 
-(** The pool type. *)
-type 'a t
+(** The pool type. [top] is the atomic head of the free list. *)
+type 'a t = {
+  mutable top : 'a node option; [@atomic]
+  cap : int;
+}
 
 val create : capacity:int -> 'a t
 (** [create ~capacity] creates a pool with [capacity] pre-allocated nodes.
