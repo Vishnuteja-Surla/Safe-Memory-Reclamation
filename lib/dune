@@ -10,3 +10,17 @@
  (name hp_pool)
  (modules hp_pool)
  (libraries lockfree_pool hazard_pointer))
+
+(library
+ (name ebr)
+ (modules ebr))
+
+(library
+ (name ebr_pool)
+ (modules ebr_pool)
+ (libraries lockfree_pool ebr))
+
+(library
+ (name ms_queue_ebr)
+ (modules ms_queue_ebr)
+ (libraries ebr))

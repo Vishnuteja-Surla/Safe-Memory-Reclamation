@@ -42,8 +42,10 @@ let create ~max_domains ~max_hp_per_domain ~retire_threshold =
   let num_domains = Atomic.make 0 in
   let domain_key = Domain.DLS.new_key (fun () ->
     let id = Atomic.fetch_and_add num_domains 1 in
-    if id >= max_domains then
-      failwith "hazard_pointer: too many domains registered";
+    if id >= max_domains then begin
+      ignore (Atomic.fetch_and_add num_domains (-1));
+      failwith "hazard_pointer: too many domains registered"
+    end;
     { domain_id = id;
       base_idx = id * max_hp_per_domain;
       retired = ref [];
@@ -76,7 +78,8 @@ let release t slot =
 
 (** Collect all currently protected pointers from ALL domains. *)
 let collect_protected t =
-  let n = Atomic.get t.num_domains * t.hp_per_domain in
+  let nd = min (Atomic.get t.num_domains) t.max_domains in
+  let n = nd * t.hp_per_domain in
   let protected = ref [] in
   for i = 0 to n - 1 do
     match Atomic.get t.slots.(i) with

@@ -17,3 +17,52 @@
  (name test_hp_pool)
  (modules test_hp_pool)
  (libraries hp_pool unix))
+
+(executable
+ (name test_ebr)
+ (modules test_ebr)
+ (libraries ebr unix))
+
+(executable
+ (name test_ebr_pool)
+ (modules test_ebr_pool)
+ (libraries ebr_pool unix))
+
+(executable
+ (name test_ms_queue_ebr)
+ (modules test_ms_queue_ebr)
+ (libraries ms_queue_ebr unix))
+
+(executable
+ (name stress_aba)
+ (modules stress_aba)
+ (libraries lockfree_pool hp_pool ebr_pool unix))
+
+(executable
+ (name benchmark_pools)
+ (modules benchmark_pools)
+ (libraries lockfree_pool hp_pool ebr_pool unix))
+
+; --- QCheck-STM (state machine, sequential correctness) ---
+
+(executable
+ (name qcheck_stm_ms_queue_ebr)
+ (modules qcheck_stm_ms_queue_ebr)
+ (libraries ms_queue_ebr qcheck-stm.sequential qcheck-stm.domain))
+
+(executable
+ (name qcheck_stm_hp_pool)
+ (modules qcheck_stm_hp_pool)
+ (libraries hp_pool qcheck-stm.sequential))
+
+(executable
+ (name qcheck_stm_ebr_pool)
+ (modules qcheck_stm_ebr_pool)
+ (libraries ebr_pool qcheck-stm.sequential))
+
+; --- QCheck-Lin (concurrent linearizability) ---
+
+(executable
+ (name qcheck_lin_ms_queue_ebr)
+ (modules qcheck_lin_ms_queue_ebr)
+ (libraries ms_queue_ebr qcheck-lin.domain))
