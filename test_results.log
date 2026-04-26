@@ -1,0 +1,960 @@
+========================================
+  FULL TEST SUITE — Sun Apr 26 12:07:17 UTC 2026
+  OCaml: 5.4.0 (TSAN switch)
+========================================
+
+=== test_lockfree_pool ===
+=== Lock-Free Pool Tests ===
+
+Testing sequential operations...
+Sequential tests passed!
+Testing single alloc/free cycles...
+Single alloc/free tests passed!
+Testing fill and drain...
+Fill and drain tests passed!
+Testing alloc_fresh (GC fallback)...
+alloc_fresh tests passed!
+Testing concurrent operations...
+Concurrent tests passed! (recovered all 100 nodes)
+Testing concurrent stress (high contention)...
+Stress test: 8 domains × 50000 ops in 1.357s
+Stress test passed! (all 16 nodes recovered)
+
+All tests passed!
+
+=== test_aba_demo ===
+=== ABA Bug Demonstration ===
+
+Initial: top → A(1) → B(2) → C(3) → sentinel
+[T1] Read top=A(1), next=B(2)
+[T2] Popped A(1). Stack: top → B → C
+[T2] Popped B(2). Stack: top → C. T2 OWNS B(2).
+[T2] Pushed A(1) back. Stack: top → A → C
+[T2] ABA ready: top == node_a (same physical pointer)
+[T1] CAS(top, A, B) = true — ABA BUG TRIGGERED!
+[T1] top is now B(2), but T2 already owns B!
+
+*** ABA BUG CONFIRMED ***
+CAS succeeded because node_a is the same physical pointer,
+even though the stack structure changed underneath.
+Node B is in the stack AND owned by T2 — double use!
+
+HP prevents this: T1's hazard pointer on A blocks T2
+from recycling A, so A can't reappear at top.
+EBR prevents this: A stays in limbo until all domains
+have advanced past the retirement epoch.
+
+=== test_hazard_pointer ===
+=== Hazard Pointer Tests ===
+
+Testing single-domain basic protect/release/retire...
+  Unprotected node reclaimed: OK
+  Protected node NOT reclaimed: OK
+  Released node reclaimed after scan: OK
+Single-domain basic tests passed!
+Testing threshold-based batching...
+  4 retires (threshold=5): no reclamation: OK
+  5th retire triggers scan: all reclaimed: OK
+Threshold batching tests passed!
+Testing multiple HP slots per domain...
+  3 nodes in 3 slots, all protected: OK
+  Released slot 1: only b reclaimed: OK
+Multiple HP slots tests passed!
+Testing multi-domain HP protection...
+  Node protected by D1, retired by D2: NOT reclaimed: OK
+Multi-domain protection tests passed!
+
+All HP tests passed!
+
+=== test_hp_pool ===
+=== HP Pool Tests ===
+
+Testing HP pool sequential operations...
+HP pool sequential tests passed!
+Testing HP pool GC fallback...
+HP pool GC fallback tests passed!
+Testing HP pool concurrent operations...
+HP pool concurrent: 4 domains × 5000 ops in 0.114s
+HP pool: recovered 0/64 nodes (some may still be in retired lists)
+
+All HP pool tests passed!
+
+=== test_ebr ===
+=== EBR Tests ===
+
+Testing EBR basic enter/exit/retire...
+  Basic EBR operations: OK
+Basic EBR tests passed!
+Testing EBR re-entrancy (nested enter/exit)...
+  Nested enter/exit (depth 2, 3): OK
+Re-entrancy tests passed!
+Testing epoch advancement...
+  Epoch advancement: 2 nodes reclaimed
+Epoch advancement tests passed!
+Testing EBR multi-domain protection...
+  Multi-domain protection: OK (reclaimed=false)
+Multi-domain protection tests passed!
+
+All EBR tests passed!
+
+=== test_ebr_pool ===
+=== EBR Pool Tests ===
+
+Testing EBR pool sequential...
+EBR pool sequential tests passed!
+Testing EBR pool concurrent...
+EBR pool concurrent: 4 domains × 5000 ops in 0.104s
+EBR pool concurrent tests passed!
+
+All EBR pool tests passed!
+
+=== test_ms_queue_ebr ===
+=== MS Queue with EBR Tests ===
+
+Testing MS Queue EBR sequential...
+Sequential tests passed!
+Testing MS Queue EBR interleaved...
+Interleaved tests passed!
+Testing MS Queue EBR fill and drain...
+Fill and drain tests passed!
+Testing MS Queue EBR concurrent...
+Concurrent: 4 producers × 4 consumers, 4000 items in 0.175s
+Concurrent tests passed! (all 4000 items seen)
+
+All MS Queue EBR tests passed!
+
+=== stress_aba ===
+=== ABA Stress Tests ===
+
+Stress testing Unprotected Pool: 8 domains × 50000 ops, pool=8
+ got slot 0, but domain 0 owns it!
+ owns it!
+, but domain 0 owns it!
+ owns it!
+0, but domain 3 owns it!
+3 got slot 0, but domain 3 owns it!
+0 owns it!
+, but domain 3 owns it!
+, but domain 3 owns it!
+ owns it!
+ got slot 0, but domain 3 owns it!
+0, but domain 3 owns it!
+1 owns it!
+ got slot 0, but domain 1 owns it!
+ got slot 0, but domain 1 owns it!
+, but domain 5 owns it!
+, but domain 4 owns it!
+ got slot 0, but domain 6 owns it!
+, but domain 1 owns it!
+ got slot 0, but domain 6 owns it!
+3 owns it!
+0, but domain 3 owns it!
+ got slot 0, but domain 3 owns it!
+, but domain 53 owns it!
+6 owns it!
+0, but domain  owns it!
+6 owns it!
+, but domain 2 owns it!
+5, but domain 0 owns it!
+0, but domain 0 owns it!
+0, but domain 7 owns it!
+7 got slot 0, but domain 6 owns it!
+ got slot 0, but domain 6 owns it!
+6 owns it!
+ owns it!
+ owns it!
+0, but domain 7 owns it!
+7 owns it!
+, but domain 6 owns it!
+6 got slot 0, but domain 2 owns it!
+5 owns it!
+, but domain 2 owns it!
+1 got slot 0, but domain 1 owns it!
+ got slot 0, but domain 1 owns it!
+ owns it!
+, but domain 3 owns it!
+0 owns it!
+, but domain 6 owns it!
+0 owns it!
+1 got slot 0, but domain 1 owns it!
+ owns it!
+10 got slot , but domain 4 owns it!
+ owns it!
+ owns it!
+0, but domain 3 owns it!
+7 owns it!
+, but domain 2 owns it!
+, but domain 2 owns it!
+56 owns it!
+ got slot 0, but domain 13 owns it!
+, but domain 1 owns it!
+ owns it!
+0, but domain 2 owns it!
+ got slot 30, but domain 1 owns it!
+ owns it!
+23 owns it!
+, but domain 2 got slot 0, but domain 2 owns it!
+2 owns it!
+07, but domain 7 owns it!
+7 owns it!
+, but domain 5 got slot 0, but domain 0 owns it!
+ got slot 0, but domain 6 owns it!
+0, but domain 0 owns it!
+ owns it!
+6 got slot 0, but domain 6 owns it!
+4 owns it!
+, but domain 6 owns it!
+ owns it!
+ owns it!
+ got slot 0, but domain 6 owns it!
+ got slot 0, but domain 64 owns it!
+ owns it!
+0, but domain 4 owns it!
+ got slot 30 owns it!
+ got slot 0, but domain 3 owns it!
+0, but domain 1 owns it!
+ owns it!
+ owns it!
+ owns it!
+0, but domain 0 owns it!
+0, but domain 7 owns it!
+1 got slot 0, but domain 1 owns it!
+ owns it!
+ owns it!
+7, but domain , but domain 1 owns it!
+6 owns it!
+ got slot 0, but domain 7 owns it!
+1 owns it!
+ got slot 0, but domain 5 owns it!
+0, but domain 1 owns it!
+ owns it!
+ owns it!
+ owns it!
+ owns it!
+, but domain 4 owns it!
+ got slot 0, but domain 1 owns it!
+, but domain  owns it!
+5 owns it!
+6 owns it!
+0 got slot 0, but domain 4 owns it!
+0, but domain 5 owns it!
+0, but domain 5 owns it!
+4 got slot 0, but domain 1 owns it!
+0 owns it!
+5 got slot 0, but domain 5 owns it!
+ got slot 0, but domain 5 got slot 0, but domain 5 owns it!
+ owns it!
+ owns it!
+2 owns it!
+0 owns it!
+72 got slot 0, but domain 0 owns it!
+ got slot 0, but domain 2 owns it!
+1 got slot 0, but domain 4 owns it!
+ owns it!
+ owns it!
+6 got slot , but domain 0, but domain 0, but domain 1 owns it!
+2 owns it!
+2 owns it!
+2 owns it!
+ got slot 0, but domain 0 owns it!
+0, but domain 2 owns it!
+4 got slot 0, but domain 4 owns it!
+0, but domain 2 owns it!
+67 got slot 0, but domain 7 owns it!
+1 got slot 0, but domain 5 owns it!
+, but domain 7 owns it!
+ got slot 0, but domain 5 owns it!
+ owns it!
+ owns it!
+, but domain 3 owns it!
+6 got slot 0, but domain 0 owns it!
+3 owns it!
+4 owns it!
+4 owns it!
+60 owns it!
+, but domain 2 owns it!
+0 got slot  got slot 0, but domain 3 owns it!
+6 owns it!
+ got slot 0, but domain 7, but domain 6 owns it!
+ got slot 0, but domain 3 owns it!
+ owns it!
+ owns it!
+, but domain 2 owns it!
+07 owns it!
+, but domain 2 owns it!
+6 owns it!
+ owns it!
+0 owns it!
+1 got slot 0, but domain 1 owns it!
+ got slot 0, but domain 5 owns it!
+ owns it!
+4 owns it!
+ got slot 0, but domain 5 owns it!
+3 got slot 0, but domain 2 got slot 4 got slot  owns it!
+ owns it!
+ got slot 0, but domain 1 owns it!
+1 got slot  got slot 0, but domain 0, but domain , but domain 3 owns it!
+ owns it!
+ got slot 0, but domain 5 owns it!
+ owns it!
+2 got slot 0, but domain 0 owns it!
+1 owns it!
+5 owns it!
+02 owns it!
+2 owns it!
+ got slot 0, but domain 3 owns it!
+ owns it!
+5 got slot 0, but domain 5 owns it!
+ owns it!
+, but domain  got slot 50 owns it!
+, but domain 2 owns it!
+2 got slot 0, but domain 2 owns it!
+ got slot 0, but domain 3 owns it!
+ got slot 0, but domain 1 owns it!
+, but domain 0 owns it!
+1 got slot 04 got slot 0, but domain 7 owns it!
+, but domain 61 owns it!
+ got slot 0 owns it!
+, but domain 3 owns it!
+ owns it!
+, but domain  owns it!
+ owns it!
+, but domain 7 owns it!
+4 got slot 0, but domain 6 owns it!
+ owns it!
+ owns it!
+ got slot 0, but domain 4 owns it!
+3 owns it!
+0, but domain 2 owns it!
+0, but domain 0 owns it!
+ owns it!
+ got slot 0, but domain 7 owns it!
+0, but domain 7 owns it!
+ got slot 07 owns it!
+0, but domain 5 owns it!
+0, but domain 7 owns it!
+ owns it!
+5 got slot 0, but domain 1 owns it!
+0 owns it!
+4 got slot 0, but domain 0 owns it!
+ got slot 0, but domain 2 owns it!
+ got slot 0, but domain 3 owns it!
+2 owns it!
+, but domain 6 owns it!
+ got slot 0, but domain 6 owns it!
+0 owns it!
+6 got slot 0, but domain 5 owns it!
+0, but domain 0 owns it!
+ got slot 0, but domain 3 owns it!
+5 owns it!
+ owns it!
+, but domain 0 owns it!
+ owns it!
+ got slot 0 owns it!
+ owns it!
+6 owns it!
+ owns it!
+, but domain 2 owns it!
+ owns it!
+0 got slot 52 got slot 0 got slot 0, but domain 5 owns it!
+0, but domain 5 owns it!
+7 owns it!
+ got slot 0, but domain 7 owns it!
+0, but domain 3 owns it!
+0, but domain 3 owns it!
+4 got slot 0, but domain 0 got slot 0, but domain 0 owns it!
+27 got slot  owns it!
+0, but domain 0 owns it!
+, but domain 4 owns it!
+, but domain 2 owns it!
+6 owns it!
+ owns it!
+ owns it!
+ owns it!
+0 owns it!
+ owns it!
+ owns it!
+4 got slot  owns it!
+ got slot 0, but domain 0 owns it!
+3 got slot 0, but domain 5 owns it!
+ got slot 0, but domain 7 owns it!
+, but domain 54 got slot 1 got slot  got slot 0, but domain 5 owns it!
+0, but domain 7 owns it!
+0, but domain 5 owns it!
+0 owns it!
+5 owns it!
+, but domain 2 got slot 0, but domain 5 owns it!
+5 owns it!
+ owns it!
+0, but domain 7 owns it!
+ got slot 0, but domain 4 owns it!
+ owns it!
+0, but domain 1 owns it!
+6 got slot 0, but domain 6 owns it!
+30, but domain 4 got slot  owns it!
+ got slot , but domain 5 owns it!
+5 got slot 0, but domain 5 owns it!
+75 owns it!
+0, but domain 4 owns it!
+6 got slot 0, but domain 6 owns it!
+ owns it!
+ owns it!
+ owns it!
+24 got slot 0, but domain 6 owns it!
+ owns it!
+1 owns it!
+ owns it!
+, but domain 3 owns it!
+ owns it!
+, but domain 6 owns it!
+ owns it!
+, but domain 5 owns it!
+2 got slot 0, but domain 2 owns it!
+ owns it!
+4 got slot 0, but domain 1 owns it!
+ owns it!
+ owns it!
+, but domain 4 owns it!
+ got slot 0, but domain 7 owns it!
+6 got slot 0, but domain 5 owns it!
+10 got slot 0 owns it!
+, but domain 3 owns it!
+1 owns it!
+5 got slot 0, but domain 50 owns it!
+, but domain 7 owns it!
+ got slot 0, but domain 7 owns it!
+ owns it!
+6, but domain 1 owns it!
+2 got slot 0, but domain 4 got slot  owns it!
+0, but domain 2 owns it!
+0, but domain 3 owns it!
+ owns it!
+0 got slot 0, but domain 1 owns it!
+5 got slot 0, but domain 5 owns it!
+7 got slot 0, but domain 2 owns it!
+6 got slot 0, but domain 6 owns it!
+ owns it!
+0, but domain 4 owns it!
+, but domain 1 owns it!
+ owns it!
+0, but domain 6 owns it!
+ owns it!
+2 got slot 0, but domain 0 owns it!
+0, but domain 5 owns it!
+ owns it!
+, but domain 2 owns it!
+, but domain 0 owns it!
+5 got slot 0, but domain 1 owns it!
+, but domain 3 owns it!
+ owns it!
+0 got slot 0, but domain 5 owns it!
+2 got slot 0, but domain 2 owns it!
+, but domain 0 owns it!
+7 got slot 0, but domain 2 owns it!
+, but domain 4 owns it!
+0, but domain 5 owns it!
+0, but domain 1 owns it!
+ owns it!
+21 got slot 0, but domain 0 owns it!
+60 got slot 0, but domain 2 owns it!
+ owns it!
+ owns it!
+0 got slot 0, but domain , but domain 72 owns it!
+5 got slot 0, but domain 5 owns it!
+ owns it!
+, but domain 5 owns it!
+4 got slot 0, but domain 4 owns it!
+50, but domain 6 owns it!
+ owns it!
+ got slot 6 got slot 0, but domain 6 owns it!
+06 owns it!
+, but domain 4 owns it!
+14 got slot  owns it!
+20, but domain 4 owns it!
+5, but domain 6 got slot 02 owns it!
+ owns it!
+0 got slot 0, but domain 5 owns it!
+ owns it!
+54, but domain 0 got slot  got slot 0, but domain 4 owns it!
+0, but domain 5 owns it!
+ owns it!
+0 owns it!
+ owns it!
+4 got slot 0, but domain 5 owns it!
+ owns it!
+, but domain 2 owns it!
+5 got slot 0, but domain 3 owns it!
+2 owns it!
+ got slot 0, but domain 3 owns it!
+, but domain 3 owns it!
+0, but domain 7 owns it!
+ owns it!
+ owns it!
+ owns it!
+ owns it!
+, but domain 7 owns it!
+ owns it!
+0, but domain 6 owns it!
+ got slot 0, but domain 6 owns it!
+ owns it!
+, but domain 7 owns it!
+ got slot 0, but domain 7 owns it!
+04, but domain  got slot 04 owns it!
+, but domain 0, but domain 46 owns it!
+ owns it!
+7 got slot 0, but domain 0 owns it!
+, but domain 7 owns it!
+ got slot 0, but domain 3 owns it!
+6 owns it!
+0, but domain 6 owns it!
+ owns it!
+, but domain 7 owns it!
+7 got slot 0, but domain 7 owns it!
+0, but domain 3 owns it!
+ owns it!
+ got slot 0, but domain 3 owns it!
+06 got slot 0, but domain 4 owns it!
+ got slot 0, but domain 7 owns it!
+0, but domain 7 owns it!
+0, but domain 4 owns it!
+7 got slot 0, but domain 4 owns it!
+ owns it!
+ got slot 0, but domain 7 owns it!
+ owns it!
+, but domain 4 owns it!
+0 got slot 0, but domain 7 owns it!
+, but domain 3 owns it!
+7 got slot 0, but domain 7 owns it!
+3 got slot 0, but domain 3 owns it!
+7 got slot 0, but domain 7 owns it!
+4 got slot 0, but domain 4 owns it!
+ owns it!
+ owns it!
+3 got slot 0, but domain 3 owns it!
+ got slot 0, but domain 7 owns it!
+3 owns it!
+0, but domain 7 owns it!
+ owns it!
+0, but domain 4 owns it!
+ owns it!
+0, but domain 7 owns it!
+3 got slot 0, but domain 7 owns it!
+4 owns it!
+4 owns it!
+ owns it!
+7 got slot 0, but domain 7 owns it!
+ got slot 0, but domain 7 owns it!
+3 got slot 0, but domain 3 owns it!
+4 got slot 0, but domain 7 owns it!
+4 got slot 0, but domain 4 owns it!
+7 got slot 0, but domain 7 owns it!
+, but domain 7 owns it!
+ owns it!
+ owns it!
+4 got slot 0, but domain 4 owns it!
+3 owns it!
+ got slot 0, but domain 3 owns it!
+3 got slot 0, but domain 3 owns it!
+4 owns it!
+ owns it!
+7 got slot 0, but domain 3 owns it!
+3 got slot 0, but domain 3 owns it!
+3 got slot 0, but domain 7 owns it!
+ got slot 0, but domain 3 owns it!
+3 owns it!
+ got slot 0, but domain 3 owns it!
+, but domain 4 owns it!
+0, but domain 3 owns it!
+7 owns it!
+ owns it!
+, but domain 3 owns it!
+, but domain 73 got slot 0, but domain 7 owns it!
+ owns it!
+3 got slot 0, but domain 7 owns it!
+, but domain 4 owns it!
+ got slot 0, but domain 3 owns it!
+0, but domain 3 owns it!
+4 owns it!
+4 owns it!
+4 got slot 0, but domain 3 owns it!
+3 got slot 0, but domain 3 owns it!
+0, but domain 7 owns it!
+3 owns it!
+ got slot 0, but domain 3 owns it!
+, but domain 3 owns it!
+ owns it!
+3 got slot 0, but domain 3 owns it!
+ got slot 0, but domain 4 owns it!
+ got slot 0, but domain 7 owns it!
+ got slot 0, but domain 7 owns it!
+4 got slot 0, but domain 7 owns it!
+7 got slot 0, but domain 7 owns it!
+0, but domain 4 owns it!
+ owns it!
+3 got slot 0, but domain 3 owns it!
+3 got slot 0, but domain 3 owns it!
+7 got slot 0, but domain 7 owns it!
+, but domain 4 owns it!
+ owns it!
+7 got slot 0, but domain 7 owns it!
+3 got slot 0, but domain 3 owns it!
+, but domain 7 owns it!
+ got slot 0, but domain 7 owns it!
+ owns it!
+7 owns it!
+4 got slot 0, but domain 7 owns it!
+0, but domain 4 owns it!
+4 got slot 0, but domain 4 owns it!
+7 owns it!
+ got slot 0, but domain 4 owns it!
+3 owns it!
+ got slot 0, but domain 7 owns it!
+7 got slot 0, but domain 7 owns it!
+, but domain 4 owns it!
+ got slot 0, but domain 3 owns it!
+ got slot 0, but domain 3 owns it!
+ owns it!
+3 owns it!
+7 got slot 0, but domain 3 owns it!
+4 owns it!
+3 got slot 0, but domain 4 owns it!
+4 owns it!
+ got slot 0, but domain 3 owns it!
+7 owns it!
+4 got slot 0, but domain 4 owns it!
+7 got slot 0, but domain 7 owns it!
+7 owns it!
+, but domain 3 owns it!
+3 got slot 0, but domain 3 owns it!
+7 owns it!
+ got slot 0, but domain 7 owns it!
+3 owns it!
+7 owns it!
+0, but domain 3 owns it!
+ owns it!
+ got slot 0, but domain 7 owns it!
+ owns it!
+ owns it!
+4 owns it!
+7 owns it!
+, but domain 3 owns it!
+, but domain 4 owns it!
+7 owns it!
+ got slot 0, but domain 3 owns it!
+ got slot 0, but domain 4 owns it!
+3 got slot 0, but domain 3 owns it!
+7 got slot 0, but domain 7 owns it!
+ got slot 0, but domain 4 owns it!
+ got slot 0, but domain 7 owns it!
+3 owns it!
+ owns it!
+0, but domain 3 owns it!
+ got slot 0, but domain 4 owns it!
+7 owns it!
+0, but domain 7 owns it!
+ got slot 0, but domain 3 owns it!
+7 got slot 0, but domain 7 owns it!
+ owns it!
+7 got slot 0, but domain 7 owns it!
+ owns it!
+4 got slot 0, but domain 4 owns it!
+ got slot 0, but domain 7 owns it!
+, but domain 7 owns it!
+ owns it!
+4 got slot 0, but domain 4 owns it!
+4 owns it!
+0, but domain 7 owns it!
+4 got slot 0, but domain 4 owns it!
+ got slot 0, but domain 7 owns it!
+7 owns it!
+0, but domain 4 owns it!
+ got slot 0, but domain 7 owns it!
+ owns it!
+7 owns it!
+4 owns it!
+1 got slot 0, but domain 4 owns it!
+0, but domain 7 owns it!
+0, but domain 4 owns it!
+7 owns it!
+0, but domain , but domain 74 owns it!
+ owns it!
+ got slot 0, but domain 7 owns it!
+7 owns it!
+ owns it!
+ owns it!
+ got slot 0, but domain 1 owns it!
+ got slot 0, but domain 4 owns it!
+1 got slot 0, but domain 7 owns it!
+ owns it!
+ owns it!
+ got slot 0, but domain 4 owns it!
+1 got slot 0, but domain 1 owns it!
+4 got slot 0, but domain 4 owns it!
+ owns it!
+7 owns it!
+ owns it!
+1 owns it!
+, but domain 4 owns it!
+0, but domain 7 owns it!
+1 got slot 0, but domain 1 owns it!
+4 got slot 0, but domain 4 owns it!
+ got slot 0, but domain 4 owns it!
+0, but domain 1 owns it!
+, but domain 4 owns it!
+ owns it!
+ got slot 0, but domain 7 owns it!
+0, but domain 4 owns it!
+1 got slot 0, but domain 1 owns it!
+ got slot 0, but domain 4 owns it!
+ owns it!
+ got slot 0, but domain 1 owns it!
+1 owns it!
+4 got slot 0, but domain 4 owns it!
+1 got slot 0, but domain 7 owns it!
+0, but domain 4 owns it!
+ owns it!
+ got slot 0, but domain 7 owns it!
+7 owns it!
+, but domain 7 owns it!
+0, but domain 1 owns it!
+7 got slot 0, but domain 7 owns it!
+ got slot 07 got slot 0, but domain 7 owns it!
+ owns it!
+ owns it!
+ got slot 0, but domain 1 owns it!
+ got slot 0, but domain 7 owns it!
+7 got slot 0, but domain 7 owns it!
+ owns it!
+, but domain 1 owns it!
+1 got slot 0, but domain 1 owns it!
+7 got slot 0, but domain 7 owns it!
+1 owns it!
+, but domain 1 owns it!
+1 got slot 0, but domain 1 owns it!
+ owns it!
+ owns it!
+1 got slot 0, but domain 1 owns it!
+7 owns it!
+0, but domain 1 owns it!
+, but domain 7 owns it!
+ got slot 0, but domain 1 owns it!
+0, but domain 4 owns it!
+1 owns it!
+4 got slot 0, but domain 4 owns it!
+0, but domain 4 owns it!
+ got slot 0, but domain 7 owns it!
+7 got slot 0, but domain 4 owns it!
+ owns it!
+4 got slot 0, but domain 4 owns it!
+, but domain 7 owns it!
+ owns it!
+ got slot 0, but domain 1 owns it!
+1 owns it!
+ owns it!
+ owns it!
+0, but domain 4 owns it!
+, but domain 1 owns it!
+ owns it!
+, but domain 7 owns it!
+ owns it!
+0, but domain 1 owns it!
+7 got slot 0, but domain 1 owns it!
+ owns it!
+7 got slot 0, but domain 7 owns it!
+1 got slot 0, but domain 7 owns it!
+ got slot 0, but domain 7 owns it!
+1 got slot 0, but domain 1 owns it!
+ got slot 0, but domain 4 owns it!
+7 got slot 0, but domain 7 owns it!
+ owns it!
+4 got slot 0, but domain 4 owns it!
+7 owns it!
+, but domain 1 owns it!
+4 got slot 0, but domain 4 owns it!
+ owns it!
+ owns it!
+4 owns it!
+0, but domain 7 owns it!
+4 got slot 0, but domain 7 owns it!
+, but domain 7 owns it!
+1 got slot 0, but domain 4 owns it!
+4 got slot 0, but domain 1 owns it!
+ got slot 0, but domain 7 owns it!
+, but domain 4 owns it!
+ got slot 0, but domain 1 owns it!
+ owns it!
+ owns it!
+7 owns it!
+ owns it!
+7 owns it!
+4 got slot 0, but domain 1 owns it!
+1 owns it!
+ got slot 0, but domain 4 owns it!
+ got slot 0, but domain 1 owns it!
+0, but domain 7 owns it!
+4 got slot 0, but domain 4 owns it!
+, but domain 1 owns it!
+0, but domain 1 owns it!
+7 owns it!
+0, but domain 4 owns it!
+, but domain 1 owns it!
+1 owns it!
+4 got slot 0, but domain 4 owns it!
+7 owns it!
+, but domain 7 owns it!
+ owns it!
+7 owns it!
+ got slot 0, but domain 1 owns it!
+7 got slot 0, but domain 7 owns it!
+ owns it!
+1 got slot 0, but domain 1 owns it!
+ owns it!
+ owns it!
+ got slot 0, but domain 1 owns it!
+ owns it!
+7 got slot 0, but domain 7 owns it!
+4 owns it!
+, but domain 7 owns it!
+4 owns it!
+4 got slot 0, but domain 7 owns it!
+ owns it!
+0, but domain 4 owns it!
+ owns it!
+4 got slot 0, but domain 7 owns it!
+ owns it!
+, but domain 7 owns it!
+4 got slot 0, but domain 4 owns it!
+4 owns it!
+ got slot 0, but domain 4 owns it!
+, but domain 4 owns it!
+0, but domain 1 owns it!
+7 got slot 0, but domain 7 owns it!
+0, but domain 7 owns it!
+ got slot 0, but domain 1 owns it!
+ owns it!
+ owns it!
+0, but domain 7 owns it!
+, but domain 1 owns it!
+ got slot 0, but domain 4 owns it!
+0, but domain 4 owns it!
+1 got slot 0, but domain 1 owns it!
+, but domain 1 owns it!
+, but domain 1 owns it!
+ owns it!
+7 got slot 0, but domain 7 owns it!
+ owns it!
+4 got slot 0, but domain 4 owns it!
+4 got slot 0, but domain 7 owns it!
+ got slot 0, but domain 7 owns it!
+4 got slot 0, but domain 7 owns it!
+, but domain 4 owns it!
+ got slot 0, but domain 4 owns it!
+1 got slot 0, but domain 7 owns it!
+ owns it!
+1 owns it!
+ got slot 0, but domain 4 owns it!
+ got slot 0, but domain 1 owns it!
+ owns it!
+1 owns it!
+ owns it!
+ owns it!
+ owns it!
+ got slot 0, but domain 7 owns it!
+1 got slot 0, but domain , but domain 1 owns it!
+7 owns it!
+0, but domain 1 owns it!
+1 got slot 0, but domain 1 owns it!
+0, but domain 1 owns it!
+ got slot 0, but domain 4 owns it!
+1 owns it!
+4 owns it!
+1 got slot 0, but domain 1 owns it!
+ owns it!
+ owns it!
+ owns it!
+0, but domain 7 owns it!
+0, but domain 1 owns it!
+ owns it!
+ got slot 0, but domain 4 owns it!
+ owns it!
+ got slot 0, but domain 1 owns it!
+ got slot 0, but domain 7 owns it!
+ owns it!
+, but domain 4 owns it!
+00, but domain 7 owns it!
+, but domain 1 owns it!
+7 owns it!
+0, but domain 1 owns it!
+1 owns it!
+1 got slot 0, but domain 4 owns it!
+ got slot 0, but domain 1 owns it!
+0, but domain 4 owns it!
+, but domain 4 owns it!
+ owns it!
+ got slot 0, but domain 1 owns it!
+1 got slot 0, but domain 4 owns it!
+, but domain 7 owns it!
+7 owns it!
+ got slot 0, but domain 1 owns it!
+
+Stress testing HP Pool: 8 domains × 50000 ops, pool=8
+  HP Pool: 0.105s, errors=0 ✓
+
+Stress testing EBR Pool: 8 domains × 50000 ops, pool=8
+  EBR Pool: 0.424s, errors=0 ✓
+
+--- Summary ---
+Unprotected: 4562 ABA errors (expected — demonstrates the bug)
+HP Pool:     0 ABA errors ✓ (ABA prevented)
+EBR Pool:    0 ABA errors ✓ (ABA prevented)
+
+=== qcheck_stm_hp_pool ===
+[2Krandom seed: 121777307
+================================================================================
+[32;1msuccess[0m (ran 1 tests)
+
+=== qcheck_stm_ebr_pool ===
+[2Krandom seed: 495526511
+================================================================================
+[32;1msuccess[0m (ran 1 tests)
+
+=== qcheck_stm_ms_queue_ebr ===
+[2Krandom seed: 329425953
+================================================================================
+[32;1msuccess[0m (ran 2 tests)
+
+=== qcheck_lin_ms_queue_ebr ===
+[2Krandom seed: 449983857
+================================================================================
+[32;1msuccess[0m (ran 1 tests)
+
+=== TSAN ===
+test_hazard_pointer            TSAN races: 0
+0
+test_hp_pool                   TSAN races: 0
+0
+test_ebr                       TSAN races: 0
+0
+test_ebr_pool                  TSAN races: 0
+0
+test_ms_queue_ebr              TSAN races: 0
+0
+stress_aba                     TSAN races: 0
+0
+
+=== benchmark_pools ===
+=== Pool Throughput Comparison ===
+
+Configuration: 50000 ops/thread × 3 runs
+
+Threads     Raw(Kops)     HP(Kops)    EBR(Kops)  Mutex(Kops)     GC(Kops)
+------------------------------------------------------------------------
+2                653K         263K         272K         188K        9156K
+3                275K         156K         242K         132K       11749K
+4                348K         141K         284K         120K       11861K
+5                279K         136K         392K          92K       10276K
+6                221K         110K         316K          65K        4968K
+7                190K          83K         320K          69K        8307K
+8                193K          83K         289K          34K        3507K
+
+Throughput in thousands of ops/sec (alloc + free cycles).
