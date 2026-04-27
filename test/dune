@@ -66,3 +66,15 @@
  (name qcheck_lin_ms_queue_ebr)
  (modules qcheck_lin_ms_queue_ebr)
  (libraries ms_queue_ebr qcheck-lin.domain))
+
+; --- DSCheck (model checking, all interleavings) ---
+
+(executable
+ (name dscheck_pool)
+ (modules dscheck_pool)
+ (libraries dscheck))
+
+(executable
+ (name dscheck_ms_queue)
+ (modules dscheck_ms_queue)
+ (libraries dscheck))
