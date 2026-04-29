@@ -45,3 +45,7 @@ val retire : 'a t -> 'a -> ('a -> unit) -> unit
 val scan : 'a t -> unit
 (** [scan hp] forces an immediate scan of all HP slots and reclaims
     unprotected retired nodes. Normally called automatically by [retire]. *)
+
+val retired_count : 'a t -> int
+(** [retired_count hp] returns the number of nodes in the calling domain's
+    retired list that are still awaiting reclamation. *)

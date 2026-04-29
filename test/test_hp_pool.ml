@@ -59,7 +59,12 @@ let test_concurrent () =
       end
     done;
     (* Free remaining *)
-    List.iter (fun n -> Hp_pool.free t n) !owned
+    List.iter (fun n -> Hp_pool.free t n) !owned;
+
+    while Hp_pool.retired_count t > 0 do
+      Hp_pool.scan t;
+      Domain.cpu_relax ()
+    done
   in
 
   let t0 = Unix.gettimeofday () in

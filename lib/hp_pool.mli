@@ -28,3 +28,6 @@ val alloc_fresh : 'a -> 'a Lockfree_pool.node
 
 val scan : 'a t -> unit
 (** Force an immediate HP scan and reclaim unprotected retired nodes. *)
+
+val retired_count : 'a t -> int
+(** Number of retired nodes pending reclamation in the calling domain. *)

@@ -87,3 +87,6 @@ let alloc_fresh = Lockfree_pool.alloc_fresh
 
 (** [scan t] forces an immediate HP scan. *)
 let scan t = Hazard_pointer.scan t.hp
+
+(** [retired_count t] returns the calling domain's pending retired count. *)
+let retired_count t = Hazard_pointer.retired_count t.hp

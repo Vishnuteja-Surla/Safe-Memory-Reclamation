@@ -116,3 +116,8 @@ let retire t node cleanup =
   r.retired_count := !(r.retired_count) + 1;
   if !(r.retired_count) >= t.retire_threshold then
     scan t
+
+(** [retired_count t] returns the calling domain's pending retired count. *)
+let retired_count t =
+  let r = get_record t in
+  !(r.retired_count)
