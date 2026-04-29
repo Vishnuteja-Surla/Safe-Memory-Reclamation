@@ -37,7 +37,10 @@ let stress_test ~name ~num_domains ~pool_size ~ops_per_domain
         match !owned with
         | [] -> ()
         | (node, slot_idx) :: rest ->
-          Atomic.set ownership.(slot_idx) (-1);
+          let expected = id in
+          let cas_ok = Atomic.compare_and_set ownership.(slot_idx) expected (-1) in
+          if not cas_ok then
+            Printf.printf "  ABA DETECTED: Domain %d tried to wipe slot %d, but someone else's name is on it!\n%!" id slot_idx;
           owned := rest;
           free node
       end
@@ -66,8 +69,8 @@ let test_unprotected () =
   let pool_size = 8 in
   let pool = Lockfree_pool.create ~capacity:pool_size in
   (* Pre-alloc and tag each node with a slot index *)
-  let slot_nodes = Array.init pool_size (fun i ->
-    match Lockfree_pool.alloc pool i with
+  let slot_nodes = Array.init pool_size (fun _ ->
+    match Lockfree_pool.alloc pool 0 with
     | Some n -> n
     | None -> failwith "init alloc failed"
   ) in
@@ -80,8 +83,12 @@ let test_unprotected () =
     ~alloc:(fun _id ->
       match Lockfree_pool.alloc pool 0 with
       | Some n ->
-        let idx = Lockfree_pool.get n in
-        Lockfree_pool.set n idx;
+        let rec find_idx i =
+          if i >= pool_size then failwith "Alien node detected!"
+          else if n == slot_nodes.(i) then i
+          else find_idx (i + 1)
+        in
+        let idx = find_idx 0 in        
         Some (n, idx)
       | None -> None)
     ~free:(fun n -> Lockfree_pool.free pool n)
@@ -90,9 +97,10 @@ let test_unprotected () =
 let test_hp () =
   let pool_size = 8 in
   let hp = Hp_pool.create ~capacity:pool_size ~max_domains:10 () in
-  (* Tag nodes with slot indices *)
-  let slot_nodes = Array.init pool_size (fun i ->
-    match Hp_pool.alloc hp i with
+  
+  (* Capture the exact physical references *)
+  let slot_nodes = Array.init pool_size (fun _ ->
+    match Hp_pool.alloc hp 0 with
     | Some n -> n
     | None -> failwith "init alloc failed"
   ) in
@@ -104,7 +112,12 @@ let test_hp () =
     ~alloc:(fun _id ->
       match Hp_pool.alloc hp 0 with
       | Some n ->
-        let idx = Hp_pool.get n in
+        let rec find_idx i =
+          if i >= pool_size then failwith "Alien node detected!"
+          else if n == slot_nodes.(i) then i
+          else find_idx (i + 1)
+        in
+        let idx = find_idx 0 in
         Some (n, idx)
       | None -> None)
     ~free:(fun n -> Hp_pool.free hp n)
@@ -113,8 +126,10 @@ let test_hp () =
 let test_ebr () =
   let pool_size = 8 in
   let ebr = Ebr_pool.create ~capacity:pool_size ~max_domains:10 () in
-  let slot_nodes = Array.init pool_size (fun i ->
-    match Ebr_pool.alloc ebr i with
+  
+  (* Capture the exact physical references *)
+  let slot_nodes = Array.init pool_size (fun _ ->
+    match Ebr_pool.alloc ebr 0 with
     | Some n -> n
     | None -> failwith "init alloc failed"
   ) in
@@ -126,7 +141,12 @@ let test_ebr () =
     ~alloc:(fun _id ->
       match Ebr_pool.alloc ebr 0 with
       | Some n ->
-        let idx = Ebr_pool.get n in
+        let rec find_idx i =
+          if i >= pool_size then failwith "Alien node detected!"
+          else if n == slot_nodes.(i) then i
+          else find_idx (i + 1)
+        in
+        let idx = find_idx 0 in
         Some (n, idx)
       | None -> None)
     ~free:(fun n -> Ebr_pool.free ebr n)
