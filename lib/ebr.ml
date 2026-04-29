@@ -77,12 +77,14 @@ let try_advance_epoch t =
   let e = Atomic.get t.global_epoch in
   let n = min (Atomic.get t.num_domains) t.max_domains in
   let all_caught_up = ref true in
-  for i = 0 to n - 1 do
-    let r = t.records.(i) in
+  let i = ref 0 in
+  while !i < n && !all_caught_up do
+    let r = t.records.(!i) in
     if Atomic.get r.active_count > 0 then begin
       if Atomic.get r.local_epoch < e then
         all_caught_up := false
-    end
+    end;
+    i := !i + 1
   done;
   if !all_caught_up then
     ignore (Atomic.compare_and_set t.global_epoch e (e + 1))
