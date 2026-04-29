@@ -62,7 +62,6 @@ let test_concurrent () =
   let total_items = num_producers * items_per_producer in
 
   let seen = Array.make total_items false in
-  let seen_lock = Mutex.create () in
 
   let producer id =
     Ms_queue_ebr.init_domain q;
@@ -78,9 +77,7 @@ let test_concurrent () =
     while Atomic.get consumed < total_items do
       match Ms_queue_ebr.try_deq q with
       | Some v ->
-        Mutex.lock seen_lock;
         seen.(v) <- true;
-        Mutex.unlock seen_lock;
         ignore (Atomic.fetch_and_add consumed 1)
       | None ->
         Domain.cpu_relax ()
