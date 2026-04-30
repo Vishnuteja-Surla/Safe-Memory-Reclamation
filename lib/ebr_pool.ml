@@ -56,3 +56,7 @@ let free t node =
 let get = Lockfree_pool.get
 let set = Lockfree_pool.set
 let alloc_fresh = Lockfree_pool.alloc_fresh
+
+(** [force_flush t] forces EBR to reclaim all limbo nodes immediately.
+    Only safe in single-domain scenarios (sequential tests). *)
+let force_flush t = Ebr.force_flush t.ebr

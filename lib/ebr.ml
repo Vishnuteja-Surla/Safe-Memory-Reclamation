@@ -118,3 +118,17 @@ let retire t node cleanup =
   let e = Atomic.get t.global_epoch in
   r.limbo.(e mod 3) := { node; cleanup } :: !(r.limbo.(e mod 3));
   try_advance_epoch t
+
+(** [force_flush t] advances the epoch enough to flush all limbo buckets.
+    Only safe when the calling domain is the sole active domain. *)
+let force_flush t =
+  (* 3 cycles of enter/retire-dummy/exit to advance epoch by 3,
+     covering all 3 limbo buckets *)
+  for _ = 1 to 3 do
+    enter t;
+    retire t (Obj.magic ()) (fun _ -> ());
+    exit t
+  done;
+  (* One final enter/exit to trigger freeing of the last bucket *)
+  enter t;
+  exit t

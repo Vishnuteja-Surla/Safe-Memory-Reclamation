@@ -34,3 +34,9 @@ val retire : 'a t -> 'a -> ('a -> unit) -> unit
 (** [retire ebr node cleanup] adds [node] to the current epoch's limbo list.
     Attempts to advance the global epoch. Nodes are freed by their owning
     domain on the next [enter] after the epoch has advanced sufficiently. *)
+
+val force_flush : 'a t -> unit
+(** [force_flush ebr] forces the epoch to advance and flushes all limbo
+    buckets for the calling domain. Only safe in single-domain scenarios
+    (e.g., sequential tests). Performs 3 enter/retire/exit cycles to
+    advance the epoch by 3, then one final enter/exit to trigger freeing. *)

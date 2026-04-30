@@ -13,3 +13,7 @@ val free : 'a t -> 'a Lockfree_pool.node -> unit
 val get : 'a Lockfree_pool.node -> 'a
 val set : 'a Lockfree_pool.node -> 'a -> unit
 val alloc_fresh : 'a -> 'a Lockfree_pool.node
+
+val force_flush : 'a t -> unit
+(** Force all retired nodes to be reclaimed immediately.
+    Only safe in single-domain scenarios (sequential tests). *)
