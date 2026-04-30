@@ -19,6 +19,10 @@ This document explains every design decision made in this project, why alternati
 11. [Bug: Domain Registration Race](#11-bug-domain-registration)
 12. [Bug: OCaml option Boxing](#12-bug-option-boxing)
 13. [Bug: QCheck-Lin Domain Exhaustion](#13-bug-qcheck-lin)
+14. [Design: `force_flush` for Deterministic Testing](#14-force-flush)
+15. [Design: `retired_count` API for HP Drain Loops](#15-retired-count)
+16. [Design: DSCheck TracedAtomic vs `[@atomic]` Fields](#16-dscheck-traced-atomic)
+17. [Design: DLS Idempotency Guard vs EBR's Built-in DLS](#17-dls-idempotency)
 
 ---
 
@@ -544,3 +548,111 @@ OCaml 5's DLS is initialized lazily per domain. When a domain terminates and a n
 Pool operations are **stateful**: `free` requires a previously-allocated node. Lin generates random command sequences — it doesn't know about this dependency. The `held_key` DLS workaround breaks because each domain has its own held list, so domain A's `free` can't free domain B's nodes.
 
 STM with explicit state tracking handles this naturally — the model tracks which nodes are allocated and generates valid command sequences.
+
+---
+
+## 14. Design: `force_flush` for Deterministic Testing {#14-force-flush}
+
+### The Problem
+
+EBR reclamation is inherently asynchronous — nodes sit in limbo until the epoch advances sufficiently. For QCheck-STM sequential tests, this non-determinism is fatal: the model can't predict when nodes return to the pool.
+
+### Why Not Just Accept Non-Determinism?
+
+The original STM test tried to model `in_limbo` as a separate counter, with a wildcard postcondition: `true (* accept either true or false *)`. This masked bugs — a completely broken EBR that never reclaimed would still pass all tests.
+
+### The Solution
+
+In a **sequential** test, only one domain is registered. This means:
+- `try_advance_epoch` always sees all domains caught up (there's only one)
+- The epoch advances on every retire that includes an `enter`/`exit` cycle
+
+So we can force the epoch forward by 3 (covering all 3 limbo buckets) with 3 enter/retire/exit cycles, then trigger freeing with a final enter/exit:
+
+```ocaml
+let force_flush t =
+  for _ = 1 to 3 do enter t; retire t dummy noop; exit t done;
+  enter t; exit t
+```
+
+**Why `Obj.magic ()`?** The dummy node retired in `force_flush` is never actually used — its cleanup is a no-op. `Obj.magic ()` avoids requiring a real value of type `'a`.
+
+**Why 3 cycles?** EBR uses 3 limbo buckets (`e mod 3`). Advancing by 3 ensures we rotate through all of them. The final enter triggers `free_limbo_bucket` on the oldest bucket.
+
+---
+
+## 15. Design: `retired_count` API for HP Drain Loops {#15-retired-count}
+
+### The Problem
+
+After a concurrent HP pool test, nodes remain stuck in per-domain retired lists because other domains' HP slots are still occupied. A single `scan` call may not reclaim everything — it only frees nodes that no one is protecting *at that instant*.
+
+### Solution
+
+Expose `retired_count` through the API chain: `Hazard_pointer.retired_count → Hp_pool.retired_count`. Test workers drain their retired lists before exiting:
+
+```ocaml
+while Hp_pool.retired_count t > 0 do
+  Hp_pool.scan t; Domain.cpu_relax ()
+done
+```
+
+The `cpu_relax` gives other workers time to release their HP slots, so the next scan can reclaim more nodes.
+
+### Why Not Just Call `scan` in a Fixed Loop?
+
+A fixed count (e.g., `for _ = 1 to 5 do scan done`) might not be enough if contention is high. The `retired_count` check is precise — it loops exactly as many times as needed.
+
+---
+
+## 16. Design: DSCheck TracedAtomic vs `[@atomic]` Fields {#16-dscheck-traced-atomic}
+
+### The Problem
+
+dscheck requires `Dscheck.TracedAtomic` to intercept atomic operations. But our production code uses OCaml 5's `[@atomic]` mutable record fields with `[%atomic.loc]` PPX syntax, which dscheck cannot intercept.
+
+### Solution: Shadow Implementations
+
+We re-implement minimal versions of our data structures (Treiber stack, MS Queue) using standard `TracedAtomic` boxed atomics. This tests the **algorithm** but not the **implementation-specific PPX wiring**.
+
+### The GC-vs-Recycling Limitation
+
+Shadow implementations use fresh GC allocations per push/enqueue. OCaml's GC guarantees unique addresses, making ABA structurally impossible. The real `Lockfree_pool` recycles pre-allocated nodes — same physical address can reappear. Therefore:
+
+- dscheck proves: **algorithm correctness** (linearizability, no value loss, FIFO ordering)
+- HP/EBR prove: **implementation safety** (ABA prevention with recycled nodes)
+- Stress tests prove: **physical correctness** (thousands of concurrent ops, zero double-allocations)
+
+Together, these three layers provide strong confidence in correctness.
+
+---
+
+## 17. Design: DLS Idempotency Guard vs EBR's Built-in DLS {#17-dls-idempotency}
+
+### The Audit Claim
+
+An audit claimed that calling `init_domain` in STM's `run` function "burns a new EBR slot per command" — a "ticking time bomb."
+
+### The Reality
+
+EBR's `init_domain` calls `Domain.DLS.get t.domain_key`. DLS initializers run **exactly once per domain** — subsequent calls return the cached value. So 10 calls from the same domain consume 1 slot, not 10.
+
+### Why We Added the Guard Anyway
+
+```ocaml
+let inited = Domain.DLS.new_key (fun () -> false)
+let ensure_init q =
+  if not (Domain.DLS.get inited) then begin
+    MSQ.init_domain q; Domain.DLS.set inited true
+  end
+```
+
+1. **Explicitness**: Makes the "call once per domain" contract visible to readers
+2. **Defense-in-depth**: If the EBR implementation ever changed, the guard still works
+3. **Documentation**: The boolean flag communicates intent more clearly than relying on DLS internals
+
+### `max_domains` Sizing
+
+- `128`: Original — works in practice but theoretically risky for `STM_domain`
+- `4096`: Tried — caused timeouts because `try_advance_epoch` scans `num_domains` records, and pre-allocating 4096 records adds memory pressure
+- `512`: Sweet spot — enough headroom for STM's domain spawning, fast enough scanning

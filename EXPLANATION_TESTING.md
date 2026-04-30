@@ -20,6 +20,9 @@ This document explains every test file, what it verifies, how it works, and the 
 12. [TSAN: ThreadSanitizer](#12-tsan)
 13. [Benchmarking](#13-benchmarking)
 14. [How to Run Everything](#14-how-to-run)
+15. [DSCheck: Exhaustive Model Checking](#15-dscheck)
+16. [Post-Audit: EBR Pool STM Strict Postconditions](#16-ebr-stm-strict)
+17. [Post-Audit: HP Pool Test Drain Loop](#17-hp-drain-loop)
 
 ---
 
@@ -533,3 +536,150 @@ done
 ```bash
 dune exec test/benchmark_pools.exe
 ```
+
+### Run DSCheck Model Checking
+```bash
+dune exec test/dscheck_pool.exe
+dune exec test/dscheck_ms_queue.exe
+```
+
+---
+
+## 15. DSCheck: Exhaustive Model Checking {#15-dscheck}
+
+### What Is DSCheck?
+
+DSCheck is a deterministic model checker for concurrent OCaml programs. Unlike stress tests (which hope to trigger races through high contention), dscheck **systematically explores every possible interleaving** of concurrent atomic operations. If a bug exists in any ordering, dscheck will find it.
+
+### How It Works
+
+dscheck intercepts all atomic memory operations via its `TracedAtomic` module. It replays the program under every possible thread schedule:
+
+```
+Interleaving 1: T1:get → T1:cas → T2:get → T2:cas
+Interleaving 2: T1:get → T2:get → T1:cas → T2:cas
+Interleaving 3: T1:get → T2:get → T2:cas → T1:cas
+...
+```
+
+For each interleaving, it checks the assertions. If any assertion fails, dscheck reports the exact schedule that caused it.
+
+### The TracedAtomic Workaround
+
+Our production code uses `[@atomic]` record fields + `[%atomic.loc]` PPX syntax, which dscheck cannot intercept. We re-implement minimal data structures using standard boxed `Atomic.t`:
+
+```ocaml
+(* Production: *)
+type 'a t = { mutable top : 'a node option; [@atomic] }
+AL.compare_and_set [%atomic.loc t.top] old_val new_val
+
+(* DSCheck shadow: *)
+type 'a t = 'a node option Atomic.t
+Atomic.compare_and_set t old_val new_val
+```
+
+This tests the **algorithm**, not the PPX wiring.
+
+### DSCheck Pool Tests (`dscheck_pool.ml`) — 4 Tests
+
+**Test 1: Concurrent Push**
+Two threads push values 1 and 2 simultaneously. Asserts both values are present afterward — no value loss.
+
+**Test 2: Concurrent Pop**
+Pre-push values 1 and 2. Two threads pop simultaneously. Asserts no thread gets a duplicate — no double-return.
+
+**Test 3: Push-Pop-Push (GC-safe ABA)**
+The classic ABA interleaving: Thread A reads top, Thread B pops/pushes back, Thread A resumes. Because each `push` creates a **fresh GC-allocated node**, ABA cannot occur — the `Some` wrapper has a new address. This test proves the GC-allocated Treiber stack algorithm is linearizable.
+
+**Test 4: Pool Ownership (Node Recycling)**
+Models the real pool's behavior: pre-allocated node objects are popped and pushed back (same object, not fresh). Tracks ownership with an atomic array — if two threads own the same node, that's double-allocation (ABA). dscheck explores all interleavings to verify this never happens.
+
+### DSCheck MS Queue Tests (`dscheck_ms_queue.ml`) — 4 Tests
+
+**Test 1: Concurrent Enqueue**
+Two threads enqueue concurrently. Asserts both items are present in the queue — no value loss even with the two-phase enqueue protocol.
+
+**Test 2: Concurrent Dequeue**
+Pre-enqueue 2 items. Two threads dequeue simultaneously. Asserts no thread gets a duplicate value.
+
+**Test 3: Mixed Enq/Deq with FIFO**
+Pre-enqueue item 1. Concurrently: Thread A enqueues 2, Thread B dequeues. Asserts FIFO ordering: if B dequeues before A's enqueue is visible, B must get 1 (not 2). Total items (dequeued + remaining) must equal 2. **Tightened assertion:** `dequeued = 1` (not `1 || 2`) — FIFO guarantees pre-enqueued item 1 dequeues first.
+
+**Test 4: Helping Mechanism**
+Tests the critical tail-lagging code path. One thread enqueues while another dequeues from a single-element queue. This forces dscheck to explore the interleaving where `head == tail` but `tail.next != None` — the "helping" path where the dequeue thread advances the tail on behalf of the stalled enqueue thread. **Tightened assertion:** `dequeued = 42` — the pre-enqueued item must dequeue first.
+
+### The GC-vs-Recycling Divergence
+
+**Critical architectural insight:** All dscheck tests use GC-allocated nodes. OCaml's GC guarantees unique addresses per allocation, making ABA structurally impossible. The real `Lockfree_pool` pre-allocates and recycles nodes — the same physical address reappears — which is exactly how ABA strikes.
+
+Therefore:
+- **dscheck proves:** algorithm linearizability (no value loss, FIFO, no duplicates)
+- **HP/EBR prove:** implementation ABA-safety (recycled node protection)
+- **Stress tests prove:** physical correctness (zero double-allocations under high contention)
+
+These three verification layers complement each other.
+
+---
+
+## 16. Post-Audit: EBR Pool STM Strict Postconditions {#16-ebr-stm-strict}
+
+### The Original Weakness
+
+The original EBR pool STM test had two critical flaws:
+
+**Flaw 1: Wildcard postcondition**
+```ocaml
+(* BEFORE — dangerous *)
+| Alloc _, Res ((Bool, _), result) ->
+  if s.free_count > 0 then result = true
+  else true  (* accept either true or false *)
+```
+A broken EBR that never reclaimed memory would still pass: when `free_count = 0`, the test accepts `false` (allocation failure) as valid. Memory leaks go undetected.
+
+**Flaw 2: Approximate value checking**
+```ocaml
+(* BEFORE — weak *)
+| Get, Res ((Option Int, _), v) ->
+  match s.allocated with
+  | [] -> v = None
+  | _ -> v <> None  (* Only checks existence, not exact value *)
+```
+Data corruption goes undetected — as long as *some* value exists, the test passes.
+
+### The Fix: `force_flush` + Strict Model
+
+By calling `Ebr_pool.force_flush` after every `Free`, reclamation becomes synchronous. This eliminates `in_limbo` from the model and restores mathematically strict postconditions:
+
+```ocaml
+(* AFTER — strict *)
+| Alloc _, Res ((Bool, _), result) ->
+  result = (s.free_count > 0)  (* Must match exactly *)
+| Get, Res ((Option Int, _), v) ->
+  match s.allocated with
+  | [] -> v = None
+  | x :: _ -> v = Some x       (* Exact value check *)
+```
+
+---
+
+## 17. Post-Audit: HP Pool Test Drain Loop {#17-hp-drain-loop}
+
+### The Original Problem
+
+After all workers finish and join, a single `Hp_pool.scan` on the main thread was insufficient to reclaim all nodes. Workers' retired lists still contained nodes because other workers' HP slots were still occupied at scan time.
+
+### The Fix
+
+Each worker now drains its own retired list before exiting, using the new `retired_count` API:
+
+```ocaml
+(* After freeing all nodes, drain retired list *)
+while Hp_pool.retired_count t > 0 do
+  Hp_pool.scan t;
+  Domain.cpu_relax ()
+done
+```
+
+The `cpu_relax` gives other workers time to release their HP slots. The loop continues until the calling domain's retired list is completely empty.
+
+**Result:** Node recovery improved from 0/64 to **64/64** — all pre-allocated nodes accounted for.

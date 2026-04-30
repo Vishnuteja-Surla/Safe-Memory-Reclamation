@@ -11,6 +11,7 @@
 8. [Michael-Scott Queue with EBR](#8-michael-scott-queue-with-ebr)
 9. [Verification and Testing](#9-verification-and-testing)
 10. [Benchmarking](#10-benchmarking)
+11. [Post-Audit Improvements](#11-post-audit-improvements)
 
 ---
 
@@ -600,3 +601,113 @@ OCaml 5.4.0's TSAN-instrumented runtime detects unsynchronized memory accesses. 
 - **EBR > HP** — EBR's amortized enter/exit is cheaper than HP's per-access load-publish-verify + global scan
 - **Mutex collapses** — lock contention causes 5.5× degradation from 2→8 threads
 - **Raw pool is fastest lock-free** — but produces thousands of ABA errors
+
+---
+
+## 11. Post-Audit Improvements (April 29–30)
+
+After the initial implementation, a series of audits and reviews led to significant improvements across the codebase. This section documents all changes made after the original explanation files.
+
+### 11.1 New API: `Hazard_pointer.retired_count`
+
+**Problem:** The HP pool test had no way to verify that all retired nodes were reclaimed after freeing. Nodes could remain stuck in the retired list.
+
+**Solution:** Added `retired_count : 'a t -> int` to `hazard_pointer.ml/mli` and `hp_pool.ml/mli`. This returns the number of nodes pending reclamation in the calling domain's retired list.
+
+**Usage in `test_hp_pool.ml`:**
+```ocaml
+(* After freeing all nodes, drain the retired list *)
+while Hp_pool.retired_count t > 0 do
+  Hp_pool.scan t;
+  Domain.cpu_relax ()
+done
+```
+
+This changed recovery from 0/64 nodes to **64/64 nodes** — a complete fix.
+
+### 11.2 New API: `Ebr.force_flush` and `Ebr_pool.force_flush`
+
+**Problem:** EBR reclamation is asynchronous — nodes sit in limbo until the epoch advances. This made it impossible to write strict STM tests, since the model couldn't predict when nodes would be reclaimed.
+
+**Solution:** Added `force_flush : 'a t -> unit` to `ebr.ml/mli` and `ebr_pool.ml/mli`. This performs 3 enter/retire/exit cycles to advance the epoch past all 3 limbo buckets, then one final enter/exit to trigger freeing:
+
+```ocaml
+let force_flush t =
+  for _ = 1 to 3 do
+    enter t;
+    retire t (Obj.magic ()) (fun _ -> ());
+    exit t
+  done;
+  enter t; exit t
+```
+
+**Constraint:** Only safe in single-domain scenarios (sequential tests). In multi-domain scenarios, other active domains would prevent epoch advancement.
+
+### 11.3 EBR Pool STM Test: Strict Postconditions
+
+**Problem (audit finding):** The original STM test had `true (* accept either true or false *)` in the `Alloc` postcondition when `free_count = 0`. This masked potential memory leaks — a broken EBR that never reclaimed would still pass. Similarly, `Get` only checked `v <> None` instead of the exact value, hiding data corruption.
+
+**Fix:** Using `force_flush` after every `Free` in the STM `run` function makes reclamation synchronous. This eliminated the need for `in_limbo` in the model and restored strict postconditions:
+
+```ocaml
+(* BEFORE: weak *)
+| Alloc _, Res ((Bool, _), result) ->
+  if s.free_count > 0 then result = true
+  else true  (* accept either — DANGEROUS *)
+
+(* AFTER: strict *)
+| Alloc _, Res ((Bool, _), result) ->
+  result = (s.free_count > 0)  (* Must match exactly *)
+| Get, Res ((Option Int, _), v) ->
+  match s.allocated with
+  | [] -> v = None
+  | x :: _ -> v = Some x  (* Exact value check *)
+```
+
+### 11.4 MS Queue STM Test: DLS Guard
+
+**Problem (audit finding):** `init_domain` was called in `run` for every command. While EBR's DLS already makes this idempotent within a domain, the test lacked clarity about this guarantee. Also, `max_domains:128` could be insufficient if `STM_domain` spawns many fresh domains.
+
+**Fix:** Added an explicit DLS guard (`inited` key) and bumped `max_domains` to 512:
+
+```ocaml
+let inited = Domain.DLS.new_key (fun () -> false)
+let ensure_init q =
+  if not (Domain.DLS.get inited) then begin
+    MSQ.init_domain q;
+    Domain.DLS.set inited true
+  end
+```
+
+Note: 4096 was tried first but caused timeouts — `try_advance_epoch` scans all pre-allocated records, and 4096 records added too much overhead.
+
+### 11.5 EBR Test Assertions
+
+**Problem:** `test_ebr.ml` had tests that printed "OK" without asserting correctness. Tests would pass even if EBR was broken.
+
+**Fix:** Added concrete assertions:
+- `test_basic`: asserts node 1 is NOT reclaimed initially, then IS reclaimed after epoch advances
+- `test_epoch_advancement`: asserts nodes 10, 20 are in `!reclaimed` after epoch cycles, and `n >= 2`
+- `test_multi_domain_protection`: asserts the node is NOT reclaimed while domain 1 holds a critical section
+
+### 11.6 DSCheck Tests: New Files
+
+**Added `dscheck_pool.ml`** (4 tests):
+1. Concurrent push — no value loss
+2. Concurrent pop — no duplicates
+3. Push-pop-push — ABA scenario (safe due to GC freshness)
+4. Pool ownership with node recycling — double-allocation detection
+
+**Added `dscheck_ms_queue.ml`** (4 tests):
+1. Concurrent enqueue — all items present
+2. Concurrent dequeue — no duplicates
+3. Mixed enq/deq — FIFO consistency
+4. Helping mechanism — tail-lagging path coverage
+
+### 11.7 DSCheck: GC-vs-Recycling Divergence
+
+**Key insight documented in dscheck tests:** The dscheck tests use GC-allocated nodes (fresh `{ value; next }` per push/enqueue). OCaml's GC guarantees unique addresses, so ABA is structurally impossible. The real `Lockfree_pool` pre-allocates and recycles nodes — same physical address can reappear — making HP/EBR mandatory. dscheck proves the *algorithm* is linearizable; HP/EBR prove the *implementation* is ABA-safe.
+
+### 11.8 FIFO Strictness in DSCheck MS Queue
+
+**User improvement:** Tightened Test 3 assertion from `dequeued = 1 || dequeued = 2` to `dequeued = 1`, and Test 4 from `dequeued = 42 || dequeued = 99` to `dequeued = 42`. Since item 1 (or 42) was enqueued before the concurrent operations begin, FIFO ordering guarantees it must be dequeued first. dscheck confirms this across all interleavings.
