@@ -199,7 +199,7 @@ let test_enq_deq () =
       let dequeued = Atomic.get r1 in
       (* If dequeued something, it must be 1 or 2 *)
       if dequeued > 0 then
-        assert (dequeued = 1 || dequeued = 2);
+        assert (dequeued = 1);
       (* Remaining in queue *)
       let remaining = ref [] in
       let rec drain () = match Queue.try_deq q with
@@ -242,9 +242,8 @@ let test_helping () =
       let enqueued = Atomic.get r_enq in
       let dequeued = Atomic.get r_deq in
       assert enqueued;
-      (* Must have dequeued 42 or 99 (or nothing if extremely weird) *)
       if dequeued > 0 then
-        assert (dequeued = 42 || dequeued = 99);
+        assert (dequeued = 42);
       (* Drain remaining and verify total *)
       let count = ref (if dequeued > 0 then 1 else 0) in
       let rec drain () = match Queue.try_deq q with
