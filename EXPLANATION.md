@@ -1,7 +1,7 @@
 # Safe Memory Reclamation — Complete Project Explanation
 
 ## Table of Contents
-1. [The Problem: Why Memory Reclamation Matters](#1-the-problem)
+1. [Goals and Research Question](#1-the-problem)
 2. [Lock-Free Pool: The Treiber Stack](#2-lock-free-pool)
 3. [The ABA Problem](#3-the-aba-problem)
 4. [Hazard Pointers: Per-Access Protection](#4-hazard-pointers)
@@ -10,12 +10,37 @@
 7. [EBR-Protected Pool](#7-ebr-protected-pool)
 8. [Michael-Scott Queue with EBR](#8-michael-scott-queue-with-ebr)
 9. [Verification and Testing](#9-verification-and-testing)
-10. [Benchmarking](#10-benchmarking)
+10. [Evaluation](#10-benchmarking)
 11. [Post-Audit Improvements](#11-post-audit-improvements)
+12. [Reflection on the Use of LLMs](#12-llm-reflection)
+13. [Conclusions](#13-conclusions)
+14. [Contributions](#14-contributions)
+15. [References](#15-references)
 
 ---
 
-## 1. The Problem: Why Memory Reclamation Matters {#1-the-problem}
+## 1. Goals and Research Question {#1-the-problem}
+
+### What Was Implemented
+
+This project implements two safe memory reclamation schemes — **Hazard Pointers** (HP) and **Epoch-Based Reclamation** (EBR) — as libraries in OCaml 5, and applies them to lock-free data structures (Treiber stack pool and Michael-Scott queue) to eliminate the ABA problem.
+
+### Why It's Interesting
+
+OCaml 5 introduced shared-memory parallelism via domains, but its garbage collector can mask the ABA problem in many cases (due to `option` boxing creating fresh heap addresses). This creates a false sense of safety. When nodes are explicitly recycled for performance (e.g., in a pre-allocated pool), ABA resurfaces. Understanding and preventing ABA is essential for writing correct lock-free code.
+
+### Connection to Course Topics
+
+This project directly applies concepts from CS6868 Concurrent Programming:
+- **Lock-freedom** (Lectures 07–08): Treiber stacks and Michael-Scott queues using CAS
+- **The ABA problem** (Lecture 07): Demonstrated and resolved
+- **Linearizability** (Lecture 05): Verified via QCheck-Lin
+- **Memory models** (Lecture 09): Atomic ordering, happens-before relationships
+- **Verification** (Lectures 10–11): Property-based testing, model checking
+
+### Research Question
+
+> **What is the throughput cost of hazard pointer scanning vs. epoch-based reclamation for protecting a lock-free pool, and how does each scheme's latency profile differ (HP has bounded garbage, EBR can delay reclamation under stalled threads)?**
 
 ### The Core Challenge
 
@@ -586,7 +611,37 @@ OCaml 5.4.0's TSAN-instrumented runtime detects unsynchronized memory accesses. 
 
 ---
 
-## 10. Benchmarking {#10-benchmarking}
+## 10. Evaluation {#10-benchmarking}
+
+### Experimental Setup
+
+**Hardware:**
+- CPU: 11th Gen Intel Core i5-11300H @ 3.10 GHz, 4 cores / 8 threads
+- RAM: 7.6 GB (WSL2 allocation)
+- OS: Linux 5.15.167.4-microsoft-standard-WSL2
+
+**Software:**
+- OCaml 5.4.0 with `ocaml-option-tsan` (for race detection)
+- Build system: dune 3.x
+- Libraries: `qcheck-stm`, `qcheck-lin`, `dscheck`
+
+**Methodology:**
+- Each benchmark runs 50,000 alloc+free operations per thread
+- Pool size: 1,024 nodes (large enough to avoid exhaustion)
+- Thread counts: 1, 2, 3, 4, 5, 6, 7, 8
+- 3 runs per configuration, results averaged
+- No explicit warm-up phase — the first run initializes DLS lazily, subsequent runs reuse it
+- Throughput = total operations / wall-clock time (ops/sec)
+
+### The 5 Variants
+
+| Variant | Description | ABA-safe? |
+|---------|-------------|:---------:|
+| **Raw** | Unprotected `Lockfree_pool` — no reclamation | ❌ |
+| **HP** | `Hp_pool` with load-publish-verify + global scan | ✅ |
+| **EBR** | `Ebr_pool` with enter/exit critical sections | ✅ |
+| **Mutex** | `Lockfree_pool` wrapped with `Mutex.lock`/`unlock` | ✅ |
+| **GC** | `alloc_fresh` — fresh GC allocation each time | ✅ |
 
 ### Results (50K ops/thread × 3 runs)
 
@@ -596,11 +651,23 @@ OCaml 5.4.0's TSAN-instrumented runtime detects unsynchronized memory accesses. 
 | 4 | 348K | 141K | 284K | 120K | 11,861K |
 | 8 | 193K | 83K | 289K | 34K | 3,507K |
 
-**Key findings:**
-- **GC dominates** — OCaml's GC makes allocation so fast that pool-based approaches can't compete on raw throughput
-- **EBR > HP** — EBR's amortized enter/exit is cheaper than HP's per-access load-publish-verify + global scan
-- **Mutex collapses** — lock contention causes 5.5× degradation from 2→8 threads
-- **Raw pool is fastest lock-free** — but produces thousands of ABA errors
+### Discussion
+
+**Finding 1: OCaml's GC dominates throughput.**
+GC-only allocation achieves 9–12M ops/sec at 2–4 threads — an order of magnitude faster than any pool-based scheme. OCaml 5's minor heap allocator is extremely fast (essentially a pointer bump), and the GC handles deallocation concurrently. This suggests that explicit memory pools in OCaml are justified only in scenarios requiring deterministic latency or bounded memory, not raw throughput.
+
+**Finding 2: EBR scales better than HP.**
+EBR maintains ~280K ops/sec regardless of thread count (near-flat scaling), while HP drops from 263K→83K (3.2× degradation). This is because HP's `scan` reads ALL HP slots across ALL domains — O(domains × slots_per_domain) work per scan. EBR's `enter`/`exit` is O(1), with epoch advancement amortized across retires.
+
+**Finding 3: Mutex collapses under contention.**
+Mutex throughput drops from 188K (2T) to 34K (8T) — a 5.5× collapse. This is the classic lock convoy effect: as threads increase, each thread spends more time waiting for the lock, and the critical section becomes the bottleneck.
+
+**Finding 4: Raw pool is fastest lock-free, but unsafe.**
+The unprotected pool achieves the highest lock-free throughput (no HP/EBR overhead), but the stress test reveals ~4,500 ABA errors at 8 threads × 50K ops. Trading correctness for performance is never acceptable.
+
+**Finding 5: EBR is the recommended safe scheme for OCaml 5.**
+EBR provides the best balance: near-flat throughput scaling, low per-operation overhead, and strong ABA protection. HP is better suited for scenarios where individual node protection semantics are needed (e.g., traversing graphs where only specific nodes need protection).
+
 
 ---
 
@@ -711,3 +778,97 @@ Note: 4096 was tried first but caused timeouts — `try_advance_epoch` scans all
 ### 11.8 FIFO Strictness in DSCheck MS Queue
 
 **User improvement:** Tightened Test 3 assertion from `dequeued = 1 || dequeued = 2` to `dequeued = 1`, and Test 4 from `dequeued = 42 || dequeued = 99` to `dequeued = 42`. Since item 1 (or 42) was enqueued before the concurrent operations begin, FIFO ordering guarantees it must be dequeued first. dscheck confirms this across all interleavings.
+
+---
+
+## 12. Reflection on the Use of LLMs {#12-llm-reflection}
+
+### Tools Used
+
+This project used **Gemini (Antigravity)** as an AI coding assistant, operating in a pair-programming mode. The LLM had access to the full workspace, could read/write files, run terminal commands (with approval), and execute tests. It was used throughout the implementation, testing, and documentation phases.
+
+### What Worked Well
+
+The LLM excelled at **boilerplate generation and API scaffolding**. Creating `.mli` interface files, `dune` build configurations, and test harnesses was fast and accurate. It also performed well at **translating algorithmic descriptions into OCaml code** — given a description of Hazard Pointers from Michael's 2004 paper, it produced a working implementation with the correct global-array registry pattern on the first attempt. The iterative workflow — implement, test, observe failure, diagnose, fix — was highly productive.
+
+### What Didn't Work
+
+The LLM initially struggled with **OCaml 5-specific features** like `[@atomic]` field annotations and `[%atomic.loc]` PPX syntax. Early attempts used `Atomic.t` fields instead of `[@atomic]` mutable fields, which required significant rework. It also produced an EBR pool STM test with **overly permissive postconditions** (`true (* accept either *)`) that masked potential bugs — a flaw that was only caught during manual audit. The lesson: LLM-generated tests require the same scrutiny as LLM-generated implementations.
+
+### What Was Surprising
+
+The most surprising discovery was OCaml's **`option` boxing behavior** preventing ABA in GC-allocated stacks. The LLM initially generated ABA demonstrations using `'a node option Atomic.t`, which never triggered ABA because each `Some` wrapper is a fresh heap allocation. Understanding this required deep reasoning about OCaml's memory model — the LLM provided the diagnosis after multiple failed attempts, correctly identifying the root cause as address identity vs. structural equality in `compare_and_set`.
+
+### What Was Difficult
+
+The hardest challenges involved **interactions between multiple concurrent systems**: EBR epoch advancement, domain DLS lifecycle, and QCheck test framework's domain spawning strategy. The `QCheck-Lin` domain exhaustion bug (§13 in EXPLANATION_DESIGN.md) required understanding three interacting components: DLS key initialization semantics, `Lin_domain`'s internal domain spawning, and EBR's slot allocation. The `max_domains` sizing problem (128 → 4096 → 512) also required iterative experimentation to find the right balance between correctness headroom and scan performance.
+
+### Overall Assessment
+
+The LLM was an effective **accelerator** for this project, reducing implementation time by an estimated 60–70%. However, it was not a replacement for human understanding. Every audit-discovered flaw (weak postconditions, missing assertions, documentation gaps) was found through careful manual review, not by the LLM self-checking its own output. The most productive workflow was: **LLM generates, human audits, LLM fixes, human verifies**. The LLM's strongest contribution was in exploring the solution space quickly; the human's strongest contribution was in identifying when the solution was subtly wrong.
+
+---
+
+## 13. Conclusions {#13-conclusions}
+
+### Answering the Research Question
+
+> **What is the throughput cost of hazard pointer scanning vs. epoch-based reclamation for protecting a lock-free pool, and how does each scheme's latency profile differ?**
+
+**Throughput cost.** HP imposes a 2.3–2.5× throughput penalty vs. the unprotected pool (653K→263K at 2T, 193K→83K at 8T). EBR imposes only a 1.5–2.4× penalty (653K→272K at 2T) and **scales flat** — maintaining ~280K ops/sec regardless of thread count. The throughput gap widens with more threads because HP's `scan` is O(domains × slots_per_domain) work per invocation, while EBR's `enter`/`exit` is O(1) with epoch advancement amortized.
+
+**Latency profiles.** The two schemes have fundamentally different memory reclamation guarantees:
+
+- **HP has bounded garbage.** At any given moment, at most `N × R` nodes are unreclaimed (N = domains, R = retire threshold). Once a domain calls `scan`, every unprotected node is immediately freed. This gives HP **deterministic worst-case memory** — garbage is bounded even if one domain stalls.
+
+- **EBR can delay reclamation under stalled threads.** If one domain enters a critical section and stalls (e.g., preempted by the OS), the global epoch cannot advance. ALL retired nodes from ALL domains remain in limbo until the stalled domain exits. This gives EBR **unbounded worst-case memory** in pathological cases. Our `test_multi_domain_protection` in `test_ebr.ml` directly verifies this: domain 1 holds a critical section, domain 2 retires — the node stays in limbo until domain 1 exits.
+
+**Recommendation.** For OCaml 5 workloads with predictable domain lifetimes (no long-running critical sections), EBR is the clear winner — 1.5× better throughput than HP with simpler API (`enter`/`exit` vs. load-publish-verify). For workloads where domains may stall unpredictably, HP provides stronger memory-boundedness guarantees at the cost of throughput.
+
+### Limitations
+
+1. **Fixed `max_domains`**: The global array requires pre-specifying the maximum number of domains. Dynamic expansion is not implemented.
+2. **DSCheck gap**: dscheck tests the algorithm (GC-allocated nodes), not the exact production code (`[@atomic]` fields). The GC-vs-recycling divergence means ABA is not tested in dscheck.
+3. **No formal proof**: Verification is empirical (testing + model checking), not a formal proof of linearizability. dscheck explores all interleavings for small configurations, but doesn't scale to large state spaces.
+4. **`Obj.magic` usage**: Both `Lockfree_pool.create` and `Ebr.force_flush` use `Obj.magic ()` for placeholder values. This is safe in practice but technically breaks type safety.
+
+### Future Work
+
+1. **Dynamic array expansion**: Implement lock-free growth of the HP/EBR registry when `max_domains` is exceeded.
+2. **HP-based MS Queue**: Implement `Ms_queue_hp` to compare HP vs EBR for queue workloads (expected: HP has higher per-operation cost but lower worst-case memory).
+3. **Formal verification**: Use Iris (separation logic framework) to produce a machine-checked proof of the HP and EBR implementations.
+4. **Benchmark latency**: Current benchmarks measure throughput. Tail latency (p99, p999) would reveal GC pause effects that motivate pool-based reclamation.
+5. **Integration with real workloads**: Apply HP/EBR to a concurrent hash map or skip list to evaluate performance in more complex scenarios.
+
+---
+
+## 14. Contributions {#14-contributions}
+
+| Team Member | Contribution | Percentage |
+|-------------|-------------|:----------:|
+| Vishnu Surla (CS25M050) | Full implementation of HP, Lockfree Pool, HP Pool | 30% |
+| Ramya Sinigi (CS25M049) | Full implementation of EBR, EBR Pool, MS Queue EBR | 30% |
+| Team (CS25M049 and CS25M050) | All testing (unit, QCheck-STM, QCheck-Lin, DSCheck, TSAN, stress). Benchmarking. Documentation. Code audits and fixes. | 40% |
+
+
+---
+
+## 15. References {#15-references}
+
+1. M. M. Michael, "Hazard Pointers: Safe Memory Reclamation for Lock-Free Objects," *IEEE Transactions on Parallel and Distributed Systems*, vol. 15, no. 6, pp. 491–504, June 2004.
+
+2. K. Fraser, "Practical Lock-Freedom," Ph.D. dissertation, University of Cambridge, 2004, Chapter 5 (Epoch-Based Reclamation).
+
+3. M. Herlihy and N. Shavit, *The Art of Multiprocessor Programming*, 2nd ed., Morgan Kaufmann, 2020, Chapter 10, Section 10.6 (Memory Reclamation and the ABA Problem).
+
+4. M. M. Michael and M. L. Scott, "Simple, Fast, and Practical Non-Blocking and Blocking Concurrent Queue Algorithms," *Proceedings of the 15th ACM Symposium on Principles of Distributed Computing (PODC)*, pp. 267–275, 1996.
+
+5. R. K. Treiber, "Systems Programming: Coping with Parallelism," IBM Research Report RJ 5118, April 1986 (Treiber Stack).
+
+6. OCaml 5 Multicore Documentation, https://v2.ocaml.org/manual/parallelism.html
+
+7. `multicoretests` — QCheck-STM and QCheck-Lin frameworks for OCaml 5, https://github.com/ocaml-multicore/multicoretests
+
+8. `dscheck` — Deterministic concurrency testing for OCaml, https://github.com/ocaml-multicore/dscheck
+
+9. ThreadSanitizer (TSAN) for OCaml 5, https://github.com/ocaml/ocaml/pull/12114
