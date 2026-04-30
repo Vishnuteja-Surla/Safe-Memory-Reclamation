@@ -1,13 +1,16 @@
 (** QCheck-STM state machine test for the EBR-protected pool.
 
-    Unlike HP pool where scan can be forced, EBR's free is deferred —
-    nodes are only returned to the pool after epoch advancement.
-    The model accounts for this by tracking nodes "in limbo" separately.
+    The key insight: by calling [Ebr_pool.force_flush] after every [Free],
+    we make EBR reclamation synchronous. This lets us use the exact same
+    strict model as the HP pool test — no "accept either" wildcards,
+    no "value exists but may differ" approximations.
 
     Model:
     - free_count: nodes available for allocation
-    - in_limbo: nodes retired but not yet reclaimed
-    - allocated: stack of values held by the test *)
+    - allocated: stack of (value) held by the test
+
+    Every postcondition is STRICT: alloc must match free_count exactly,
+    and Get must return the exact stored value. *)
 
 open QCheck
 open STM
@@ -23,10 +26,10 @@ module Spec = struct
     | Free -> "Free"
     | Get -> "Get"
 
+  (** Strict model: no in_limbo — force_flush makes Free synchronous. *)
   type state = {
     free_count : int;
-    in_limbo : int;       (** nodes retired but not yet reclaimed *)
-    allocated : int list;
+    allocated : int list;  (** stack of values held by the test *)
   }
 
   type sut = {
@@ -44,7 +47,7 @@ module Spec = struct
     in
     QCheck.make ~print:show_cmd (Gen.oneof_weighted cmds)
 
-  let init_state = { free_count = 10; in_limbo = 0; allocated = [] }
+  let init_state = { free_count = 10; allocated = [] }
 
   let init_sut () =
     let pool = Ebr_pool.create ~capacity:10 ~max_domains:128 () in
@@ -54,19 +57,17 @@ module Spec = struct
   let cleanup _ = ()
 
   let next_state c s = match c with
-    | Alloc _ ->
+    | Alloc v ->
       if s.free_count > 0 then
-        { s with free_count = s.free_count - 1;
-                 allocated = 0 :: s.allocated }
-        (* We use 0 as placeholder — we don't track values precisely
-           because EBR alloc may return nodes in different order *)
+        { free_count = s.free_count - 1;
+          allocated = v :: s.allocated }
       else s
     | Free ->
       (match s.allocated with
        | [] -> s
        | _ :: rest ->
-         (* Node goes to limbo, NOT immediately back to free list *)
-         { s with in_limbo = s.in_limbo + 1; allocated = rest })
+         (* force_flush makes Free synchronous — node returns to pool *)
+         { free_count = s.free_count + 1; allocated = rest })
     | Get -> s
 
   let precond _ _ = true
@@ -89,6 +90,8 @@ module Spec = struct
        | node :: rest ->
          Atomic.set sut.held rest;
          Ebr_pool.free sut.pool node;
+         (* THE FIX: Force immediate reclamation! *)
+         Ebr_pool.force_flush sut.pool;
          Res (bool, true))
     | Get ->
       let held = Atomic.get sut.held in
@@ -98,19 +101,15 @@ module Spec = struct
 
   let postcond c (s : state) res = match c, res with
     | Alloc _, Res ((Bool, _), result) ->
-      (* With EBR, alloc succeeds if there are free nodes.
-         Limbo nodes may or may not have been reclaimed by now,
-         so we accept both outcomes when pool might be empty. *)
-      if s.free_count > 0 then result = true
-      else
-        (* Pool might have reclaimed some limbo nodes, or not *)
-        true  (* accept either true or false *)
+      (* STRICT: must succeed iff free nodes available *)
+      result = (s.free_count > 0)
     | Free, Res ((Bool, _), result) ->
       result = (s.allocated <> [])
     | Get, Res ((Option Int, _), v) ->
+      (* STRICT: must return the exact stored value *)
       (match s.allocated with
        | [] -> v = None
-       | _ -> v <> None)  (* value exists but may differ due to reuse *)
+       | x :: _ -> v = Some x)
     | _, _ -> false
 end
 

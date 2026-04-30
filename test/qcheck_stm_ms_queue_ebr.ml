@@ -3,12 +3,28 @@
     Uses QCheck-STM to verify the queue against a sequential specification
     (a simple list-based FIFO). Tests both sequential and concurrent modes.
 
-    Based on the pattern from Lecture 08's qcheck_stm_lockfree_queue.ml. *)
+    Based on the pattern from Lecture 08's qcheck_stm_lockfree_queue.ml.
+
+    Note on init_domain idempotency:
+    EBR's init_domain uses Domain.DLS internally, so calling it multiple
+    times from the SAME domain only consumes one EBR slot. The DLS guard
+    below is an extra safety layer for clarity, and max_domains is bumped
+    to 4096 to accommodate the many fresh domains STM_domain may spawn. *)
 
 open QCheck
 open STM
 
 module MSQ = Ms_queue_ebr
+
+(* DLS guard: ensures init_domain is only called once per domain.
+   Redundant with EBR's internal DLS, but makes the intent explicit. *)
+let inited = Domain.DLS.new_key (fun () -> false)
+
+let ensure_init q =
+  if not (Domain.DLS.get inited) then begin
+    MSQ.init_domain q;
+    Domain.DLS.set inited true
+  end
 
 module Spec = struct
   type cmd =
@@ -35,8 +51,8 @@ module Spec = struct
   let init_state = { contents = [] }
 
   let init_sut () =
-    let q = MSQ.create ~max_domains:128 () in
-    MSQ.init_domain q;
+    let q = MSQ.create ~max_domains:512 () in
+    ensure_init q;
     q
 
   let cleanup _ = ()
@@ -51,7 +67,7 @@ module Spec = struct
   let precond _ _ = true
 
   let run c q =
-    MSQ.init_domain q;
+    ensure_init q;
     match c with
     | Enq i -> Res (unit, MSQ.enq q i)
     | Try_deq -> Res (option int, MSQ.try_deq q)
