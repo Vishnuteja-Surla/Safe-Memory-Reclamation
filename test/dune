@@ -43,6 +43,11 @@
  (modules benchmark_pools)
  (libraries lockfree_pool hp_pool ebr_pool unix))
 
+(executable
+ (name stress_aba_direct)
+ (modules stress_aba_direct)
+ (libraries hazard_pointer ebr unix))
+
 ; --- QCheck-STM (state machine, sequential correctness) ---
 
 (executable

@@ -1,3 +1,4 @@
-*.pdf
+# *.pdf removed to allow committing report/main.pdf
 cs6868_s26/
 _build
+TOTAL_EXPLANATION.md
